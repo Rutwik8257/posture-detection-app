@@ -1,8 +1,7 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { Pose } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
-import { POSE_CONNECTIONS } from '@mediapipe/pose';
+import { Pose, POSE_CONNECTIONS } from '@mediapipe/pose';
+import React, { useEffect, useRef, useState } from 'react';
 import { PoseLandmark, PostureAnalysis, PostureMode } from '../types/pose';
 import { analyzePosture } from '../utils/poseUtils';
 
@@ -59,20 +58,24 @@ export const WebcamStream: React.FC<WebcamStreamProps> = ({
       poseRef.current = pose;
 
       // Initialize camera
-      if (videoRef.current) {
-        const camera = new Camera(videoRef.current, {
-          onFrame: async () => {
-            if (poseRef.current && videoRef.current) {
-              await poseRef.current.send({ image: videoRef.current });
-            }
-          },
-          width: 640,
-          height: 480
-        });
+if (videoRef.current) {
+  // ⬇️ Add this line
+  await navigator.mediaDevices.getUserMedia({ video: true });
 
-        await camera.start();
-        cameraRef.current = camera;
+  const camera = new Camera(videoRef.current, {
+    onFrame: async () => {
+      if (poseRef.current && videoRef.current) {
+        await poseRef.current.send({ image: videoRef.current });
       }
+    },
+    width: 640,
+    height: 480
+  });
+
+  await camera.start();
+  cameraRef.current = camera;
+}
+
 
       setIsLoading(false);
     } catch (err) {
