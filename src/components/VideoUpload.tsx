@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Upload, Play, Pause, Square } from 'lucide-react';
-import { Pose } from '@mediapipe/pose';
+import { Pose } from "@mediapipe/pose/pose";
+
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 import { POSE_CONNECTIONS } from '@mediapipe/pose';
 import { PoseLandmark, PostureAnalysis, PostureMode } from '../types/pose';
@@ -22,7 +23,7 @@ export const VideoUpload: React.FC<VideoUploadProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const poseRef = useRef<Pose | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<number | null>(null);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
