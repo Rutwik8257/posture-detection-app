@@ -1,9 +1,5 @@
 import React, { useRef, useState } from 'react';
 import { Upload, Play, Pause, Square } from 'lucide-react';
-import { Pose } from "@mediapipe/pose/pose";
-
-import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
-import { POSE_CONNECTIONS } from '@mediapipe/pose';
 import { PoseLandmark, PostureAnalysis, PostureMode } from '../types/pose';
 import { analyzePosture } from '../utils/poseUtils';
 
@@ -22,8 +18,8 @@ export const VideoUpload: React.FC<VideoUploadProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const poseRef = useRef<Pose | null>(null);
-  const intervalRef = useRef<number | null>(null);
+  const poseRef = useRef<any>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -37,54 +33,99 @@ export const VideoUpload: React.FC<VideoUploadProps> = ({
   };
 
   const initializePose = async () => {
-    const pose = new Pose({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+    try {
+      // Load MediaPipe scripts if not already loaded
+      await loadMediaPipeScripts();
+      
+      const pose = new (window as any).Pose({
+        locateFile: (file: string) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+        }
+      });
+
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        smoothSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      pose.onResults(onResults);
+      poseRef.current = pose;
+    } catch (error) {
+      console.error('Failed to initialize pose:', error);
+    }
+  };
+
+  const loadMediaPipeScripts = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      // Check if already loaded
+      if ((window as any).Pose) {
+        resolve();
+        return;
       }
-    });
 
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      smoothSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
+      const scripts = [
+        'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js'
+      ];
 
-    pose.onResults(onResults);
-    poseRef.current = pose;
+      let loadedCount = 0;
+      const totalScripts = scripts.length;
+
+      scripts.forEach((src) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => {
+          loadedCount++;
+          if (loadedCount === totalScripts) {
+            resolve();
+          }
+        };
+        script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+        document.head.appendChild(script);
+      });
+    });
   };
 
   const onResults = (results: any) => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !videoRef.current) return;
 
     const canvas = canvasRef.current;
+    const video = videoRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = results.image.width;
-    canvas.height = results.image.height;
+    // Set canvas dimensions to match video
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw the video frame
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    // Draw the video frame first
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (results.poseLandmarks) {
-      // Draw pose connections
-      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
-        color: '#00ff00',
-        lineWidth: 2
-      });
+      // Draw pose connections and landmarks
+      if ((window as any).drawConnectors && (window as any).POSE_CONNECTIONS) {
+        (window as any).drawConnectors(ctx, results.poseLandmarks, (window as any).POSE_CONNECTIONS, {
+          color: '#00ff00',
+          lineWidth: 2
+        });
+      }
 
-      // Draw landmarks
-      drawLandmarks(ctx, results.poseLandmarks, {
-        color: '#ff0000',
-        lineWidth: 1,
-        radius: 3
-      });
+      if ((window as any).drawLandmarks) {
+        (window as any).drawLandmarks(ctx, results.poseLandmarks, {
+          color: '#ff0000',
+          lineWidth: 1,
+          radius: 3
+        });
+      }
 
       // Analyze posture
       const landmarks: PoseLandmark[] = results.poseLandmarks;
@@ -94,8 +135,12 @@ export const VideoUpload: React.FC<VideoUploadProps> = ({
   };
 
   const processFrame = async () => {
-    if (poseRef.current && videoRef.current) {
-      await poseRef.current.send({ image: videoRef.current });
+    if (poseRef.current && videoRef.current && !videoRef.current.paused) {
+      try {
+        await poseRef.current.send({ image: videoRef.current });
+      } catch (err) {
+        console.warn('Frame processing error:', err);
+      }
     }
   };
 
@@ -193,13 +238,13 @@ export const VideoUpload: React.FC<VideoUploadProps> = ({
           <div className="relative bg-black rounded-lg overflow-hidden">
             <video
               ref={videoRef}
-              className="hidden"
+              className="absolute inset-0 w-full h-auto max-h-96 object-contain"
               onEnded={handleStop}
             />
             
             <canvas
               ref={canvasRef}
-              className="w-full h-auto max-h-96 object-contain"
+              className="relative w-full h-auto max-h-96 object-contain"
             />
             
             {isAnalyzing && (
