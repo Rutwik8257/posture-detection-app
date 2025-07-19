@@ -1,7 +1,5 @@
-import { Camera } from '@mediapipe/camera_utils';
-import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
-import { Pose, POSE_CONNECTIONS } from '@mediapipe/pose';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
+import { CameraPermissionHandler } from './CameraPermissionHandler';
 import { PoseLandmark, PostureAnalysis, PostureMode } from '../types/pose';
 import { analyzePosture } from '../utils/poseUtils';
 
@@ -20,27 +18,43 @@ export const WebcamStream: React.FC<WebcamStreamProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const poseRef = useRef<Pose | null>(null);
-  const cameraRef = useRef<Camera | null>(null);
+  const [hasPermission, setHasPermission] = useState(false);
+  const poseRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (isActive) {
-      initializePose();
+      if (hasPermission) {
+        initializePose();
+      }
     } else {
       cleanup();
     }
 
     return cleanup;
-  }, [isActive]);
+  }, [isActive, hasPermission]);
+
+  const handlePermissionGranted = () => {
+    setHasPermission(true);
+  };
+
+  const handlePermissionDenied = (errorMsg: string) => {
+    setError(errorMsg);
+    setHasPermission(false);
+  };
 
   const initializePose = async () => {
     setIsLoading(true);
     setError(null);
 
     try {
+      // Load MediaPipe scripts dynamically
+      await loadMediaPipeScripts();
+      
       // Initialize MediaPipe Pose
-      const pose = new Pose({
-        locateFile: (file) => {
+      const pose = new (window as any).Pose({
+        locateFile: (file: string) => {
           return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
         }
       });
@@ -57,63 +71,121 @@ export const WebcamStream: React.FC<WebcamStreamProps> = ({
       pose.onResults(onResults);
       poseRef.current = pose;
 
-      // Initialize camera
-if (videoRef.current) {
-  // ⬇️ Add this line
-  await navigator.mediaDevices.getUserMedia({ video: true });
+      // Initialize webcam
+      if (videoRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user'
+          }
+        });
 
-  const camera = new Camera(videoRef.current, {
-    onFrame: async () => {
-      if (poseRef.current && videoRef.current) {
-        await poseRef.current.send({ image: videoRef.current });
+        videoRef.current.srcObject = stream;
+        streamRef.current = stream;
+        
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play();
+            // Wait a bit for video to start playing
+            setTimeout(() => {
+              startProcessing();
+            }, 500);
+          }
+        };
       }
-    },
-    width: 640,
-    height: 480
-  });
-
-  await camera.start();
-  cameraRef.current = camera;
-}
-
 
       setIsLoading(false);
     } catch (err) {
-      setError('Failed to initialize pose detection');
+      setError(`Failed to initialize pose detection: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setIsLoading(false);
       console.error('Pose initialization error:', err);
     }
   };
 
+  const loadMediaPipeScripts = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      // Check if already loaded
+      if ((window as any).Pose) {
+        resolve();
+        return;
+      }
+
+      const scripts = [
+        'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js'
+      ];
+
+      let loadedCount = 0;
+      const totalScripts = scripts.length;
+
+      scripts.forEach((src) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => {
+          loadedCount++;
+          if (loadedCount === totalScripts) {
+            resolve();
+          }
+        };
+        script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+        document.head.appendChild(script);
+      });
+    });
+  };
+
+  const startProcessing = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    
+    intervalRef.current = setInterval(async () => {
+      if (poseRef.current && videoRef.current && !videoRef.current.paused && videoRef.current.readyState >= 2) {
+        try {
+          await poseRef.current.send({ image: videoRef.current });
+        } catch (err) {
+          console.warn('Frame processing error:', err);
+        }
+      }
+    }, 150); // Process every 150ms (6-7 FPS for better performance)
+  };
+
   const onResults = (results: any) => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !videoRef.current) return;
 
     const canvas = canvasRef.current;
+    const video = videoRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = results.image.width;
-    canvas.height = results.image.height;
+    // Set canvas dimensions to match video
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw the image
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    // Draw the video frame first
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (results.poseLandmarks) {
-      // Draw pose connections
-      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
-        color: '#00ff00',
-        lineWidth: 2
-      });
+      // Draw pose connections and landmarks
+      if ((window as any).drawConnectors && (window as any).POSE_CONNECTIONS) {
+        (window as any).drawConnectors(ctx, results.poseLandmarks, (window as any).POSE_CONNECTIONS, {
+          color: '#00ff00',
+          lineWidth: 2
+        });
+      }
 
-      // Draw landmarks
-      drawLandmarks(ctx, results.poseLandmarks, {
-        color: '#ff0000',
-        lineWidth: 1,
-        radius: 3
-      });
+      if ((window as any).drawLandmarks) {
+        (window as any).drawLandmarks(ctx, results.poseLandmarks, {
+          color: '#ff0000',
+          lineWidth: 1,
+          radius: 3
+        });
+      }
 
       // Analyze posture
       const landmarks: PoseLandmark[] = results.poseLandmarks;
@@ -123,15 +195,32 @@ if (videoRef.current) {
   };
 
   const cleanup = () => {
-    if (cameraRef.current) {
-      cameraRef.current.stop();
-      cameraRef.current = null;
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    
     if (poseRef.current) {
       poseRef.current.close();
       poseRef.current = null;
     }
   };
+
+  // Show permission handler if camera is active but no permission
+  if (isActive && !hasPermission) {
+    return (
+      <CameraPermissionHandler onPermissionGranted={handlePermissionGranted} onPermissionDenied={handlePermissionDenied} />
+    );
+  }
 
   if (error) {
     return (
@@ -158,15 +247,17 @@ if (videoRef.current) {
       <div className="relative bg-black rounded-lg overflow-hidden">
         <video
           ref={videoRef}
-          className="hidden"
+          className="absolute inset-0 w-full h-auto max-h-96 object-contain"
           autoPlay
           playsInline
           muted
+          style={{ transform: 'scaleX(-1)' }}
         />
         
         <canvas
           ref={canvasRef}
-          className="w-full h-auto max-h-96 object-contain"
+          className="relative w-full h-auto max-h-96 object-contain"
+          style={{ transform: 'scaleX(-1)' }}
         />
         
         {!isActive && (
