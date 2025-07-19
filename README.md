@@ -3,6 +3,8 @@
 This project detects and analyzes human posture using pose landmarks for real-time feedback. It evaluates different postures such as **squats** and **desk sitting**, and provides alerts based on predefined ergonomic rules.
 
 ---
+deploy link:
+[posture-detection-app-rho.vercel.app](https://posture-detection-app-rho.vercel.app/)
 
 ## 📌 Features
 
